@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pokemon World War — Komando Pertempuran</title>
+  <meta name="description" content="Prototipe fan-made: pilih Pokemon, pertahankan atau rebut kota melawan AI. Tidak resmi, tanpa multiplayer daring." />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="shell" id="setup-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Pokemon <strong>World War</strong></span>
+      </div>
+      <span class="badge-solo">Solo vs AI</span>
+    </header>
+
+    <div class="layout">
+      <nav class="rail" aria-label="Tahapan persiapan">
+        <button type="button" class="rail-btn is-active" data-goto="1" aria-label="Langkah 1: pilih karakter">
+          <span class="rail-num">1</span><span class="rail-label">Karakter</span>
+        </button>
+        <button type="button" class="rail-btn" data-goto="2" aria-label="Langkah 2: medan perang">
+          <span class="rail-num">2</span><span class="rail-label">Medan</span>
+        </button>
+        <button type="button" class="rail-btn" data-goto="3" aria-label="Langkah 3: fase dan waktu">
+          <span class="rail-num">3</span><span class="rail-label">Fase</span>
+        </button>
+      </nav>
+
+      <main class="content">
+        <div class="content-head">
+          <p class="eyebrow">Komando Pertempuran</p>
+          <h1>Satu kota. Satu pertarungan.</h1>
+          <p class="lede">Prototipe fan-made tidak resmi — simulasi fantasi, bukan politik dunia nyata. Pilih karakter, tentukan medan, lalu menangkan zona sebelum waktu habis.</p>
+        </div>
+
+        <section class="step-panel is-active" id="step-1" aria-labelledby="step-1-title">
+          <h2 id="step-1-title" class="step-title"><span>Pilih karakter</span></h2>
+          <div class="card-grid" id="character-grid" role="radiogroup" aria-label="Pilih karakter Pokemon"></div>
+          <div class="step-actions">
+            <button type="button" class="btn-next" data-goto="2">Lanjut ke medan &rarr;</button>
+          </div>
+        </section>
+
+        <section class="step-panel" id="step-2" aria-labelledby="step-2-title" hidden>
+          <h2 id="step-2-title" class="step-title"><span>Medan perang</span></h2>
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">Negara</span>
+              <select id="select-country"></select>
+            </label>
+            <label class="field">
+              <span class="field-label">Kota</span>
+              <select id="select-city"></select>
+            </label>
+            <div class="field">
+              <span class="field-label" id="role-label">Peranmu</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="role-label" id="role-segment"></div>
+            </div>
+            <label class="field">
+              <span class="field-label" id="opposing-label">Dijajah oleh</span>
+              <select id="select-opposing"></select>
+            </label>
+          </div>
+          <div class="step-actions">
+            <button type="button" class="btn-back" data-goto="1">&larr; Karakter</button>
+            <button type="button" class="btn-next" data-goto="3">Lanjut ke fase &rarr;</button>
+          </div>
+        </section>
+
+        <section class="step-panel" id="step-3" aria-labelledby="step-3-title" hidden>
+          <h2 id="step-3-title" class="step-title"><span>Fase &amp; waktu</span></h2>
+          <div class="card-grid phase-grid" id="phase-grid" role="radiogroup" aria-label="Pilih fase pertempuran"></div>
+          <div class="field timer-field">
+            <span class="field-label" id="timer-label">Durasi pertandingan</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="timer-label" id="timer-segment"></div>
+          </div>
+          <div class="rules-box" id="rules-box" aria-live="polite"></div>
+          <div class="step-actions">
+            <button type="button" class="btn-back" data-goto="2">&larr; Medan</button>
+          </div>
+        </section>
+      </main>
+
+      <aside class="briefing" aria-label="Ringkasan briefing">
+        <div class="briefing-card">
+          <p class="eyebrow small">Briefing</p>
+          <canvas id="briefing-map" width="320" height="210" aria-label="Peta skema medan"></canvas>
+          <dl class="briefing-meta" id="briefing-meta"></dl>
+          <p class="objective-line" id="objective-line"></p>
+          <button type="button" class="cta" id="btn-start">Mulai perang solo</button>
+          <p class="fine-print">Fan-made · Tanpa multiplayer daring · Simpan zona, menangkan perang.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <section class="arena" id="arena" hidden aria-label="Arena pertempuran">
+    <div class="arena-frame">
+      <header class="hud">
+        <div class="hud-block hud-context" id="hud-context"></div>
+        <div class="hud-block hud-hp">
+          <span class="hud-label" id="hud-char-name">HP</span>
+          <div class="hp-bar"><div class="hp-fill" id="hud-hp-fill"></div></div>
+        </div>
+        <div class="hud-block hud-timer" id="hud-timer">3:00</div>
+        <div class="hud-block hud-objective">
+          <span class="hud-label" id="hud-objective-label">Zona</span>
+          <div class="objective-bar"><div class="objective-fill" id="hud-objective-fill"></div></div>
+          <span class="hud-sub" id="hud-objective-text"></span>
+        </div>
+        <div class="hud-block hud-enemies"><span class="hud-label">Musuh</span><span id="hud-enemy-count">0</span></div>
+        <button type="button" class="hud-pause" id="btn-pause" aria-label="Jeda permainan">Jeda</button>
+      </header>
+
+      <div class="controls-strip" id="controls-strip">
+        <span class="cs-keys" id="cs-keys"></span>
+        <span class="cs-status"><span id="cs-hp"></span><span class="cs-sep" aria-hidden="true">&middot;</span><span id="cs-skill"></span></span>
+      </div>
+
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="game-canvas"></canvas>
+        <div class="touch-controls" id="touch-controls" hidden>
+          <div class="joystick" id="joystick" aria-label="Kendali arah">
+            <div class="joystick-knob" id="joystick-knob"></div>
+          </div>
+          <div class="touch-buttons">
+            <button type="button" class="touch-btn skill" id="touch-skill" aria-label="Skill (Q)">Q</button>
+            <button type="button" class="touch-btn attack" id="touch-attack" aria-label="Serang (Spasi)">&#9876;</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-backdrop" id="pause-modal" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+          <h2 id="pause-title">Permainan dijeda</h2>
+          <p class="modal-sub">Timer dan simulasi berhenti. Istirahat sejenak, komandan.</p>
+          <div class="modal-actions">
+            <button type="button" class="btn-primary" id="btn-resume">Lanjutkan</button>
+            <button type="button" class="btn-ghost" id="btn-restart">Ulangi pertandingan</button>
+            <button type="button" class="btn-ghost" id="btn-to-briefing">Kembali ke briefing</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-backdrop" id="result-modal" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="result-title">
+          <p class="eyebrow small" id="result-eyebrow">Hasil pertempuran</p>
+          <h2 id="result-title">Kemenangan</h2>
+          <p class="modal-sub" id="result-desc"></p>
+          <dl class="result-stats" id="result-stats"></dl>
+          <div class="modal-actions">
+            <button type="button" class="btn-primary" id="btn-replay">Main lagi</button>
+            <button type="button" class="btn-ghost" id="btn-result-briefing">Kembali ke briefing</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

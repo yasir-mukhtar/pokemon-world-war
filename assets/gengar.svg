@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Gengar">
+  <rect width="200" height="200" rx="24" fill="#efecf8"/>
+  <!-- spiky silhouette -->
+  <path d="M100 26 L114 44 L136 34 L140 58 L164 56 L156 80 L180 88 L162 106 L178 124 L152 132 L156 158 L130 152 L122 176 L100 162 L78 176 L70 152 L44 158 L48 132 L22 124 L38 106 L20 88 L44 80 L36 56 L60 58 L64 34 L86 44 Z" fill="#7b5ea7"/>
+  <circle cx="100" cy="108" r="62" fill="#7b5ea7"/>
+  <!-- eyes -->
+  <path d="M58 92 Q80 80 94 92 Q80 100 58 92 Z" fill="#c8402e"/>
+  <path d="M142 92 Q120 80 106 92 Q120 100 142 92 Z" fill="#c8402e"/>
+  <circle cx="78" cy="90" r="3" fill="#2b2118"/>
+  <circle cx="122" cy="90" r="3" fill="#2b2118"/>
+  <!-- grin -->
+  <path d="M56 118 Q100 152 144 118 Q100 132 56 118 Z" fill="#f4e9d0"/>
+  <path d="M64 120 L72 132 L80 122 L88 134 L96 124 L104 134 L112 122 L120 132 L128 120 L136 128" stroke="#7b5ea7" stroke-width="3" fill="none"/>
+</svg>

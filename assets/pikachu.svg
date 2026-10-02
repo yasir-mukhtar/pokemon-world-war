@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Pikachu">
+  <rect width="200" height="200" rx="24" fill="#fdf6df"/>
+  <circle cx="100" cy="118" r="62" fill="#f2c230"/>
+  <!-- ears -->
+  <path d="M52 66 C46 34 52 16 62 12 L84 52 Z" fill="#f2c230"/>
+  <path d="M148 66 C154 34 148 16 138 12 L116 52 Z" fill="#f2c230"/>
+  <path d="M55 52 C52 34 56 20 62 15 L74 40 Z" fill="#2b2118"/>
+  <path d="M145 52 C148 34 144 20 138 15 L126 40 Z" fill="#2b2118"/>
+  <!-- face -->
+  <circle cx="78" cy="106" r="9" fill="#2b2118"/>
+  <circle cx="122" cy="106" r="9" fill="#2b2118"/>
+  <circle cx="80.5" cy="103.5" r="3" fill="#fff"/>
+  <circle cx="124.5" cy="103.5" r="3" fill="#fff"/>
+  <circle cx="62" cy="128" r="11" fill="#c8402e"/>
+  <circle cx="138" cy="128" r="11" fill="#c8402e"/>
+  <path d="M94 120 Q100 126 106 120" stroke="#2b2118" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M97 114 h6 l-3 5 z" fill="#2b2118"/>
+  <!-- tail bolt hint -->
+  <path d="M150 158 l22 -10 -10 -14 20 -8 -14 26 10 -2 -18 16 z" fill="#f2c230" stroke="#2b2118" stroke-width="3" stroke-linejoin="round"/>
+</svg>

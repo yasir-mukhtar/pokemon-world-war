@@ -1,0 +1,15 @@
+{
+  "name": "pokemon-world-war",
+  "version": "1.0.0",
+  "description": "Prototipe fan-made Pokemon World War — pertarungan solo vs AI di browser, tanpa dependensi.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

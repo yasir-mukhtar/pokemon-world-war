@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Lucario">
+  <rect width="200" height="200" rx="24" fill="#e8eefb"/>
+  <!-- ears / head spikes -->
+  <path d="M62 60 L52 20 L86 44 Z" fill="#2b2118"/>
+  <path d="M138 60 L148 20 L114 44 Z" fill="#2b2118"/>
+  <path d="M78 48 L70 30 L90 44 Z" fill="#3a7bd5"/>
+  <path d="M122 48 L130 30 L110 44 Z" fill="#3a7bd5"/>
+  <!-- head -->
+  <path d="M100 42 C140 42 152 78 150 104 C148 140 128 168 100 168 C72 168 52 140 50 104 C48 78 60 42 100 42 Z" fill="#3a7bd5"/>
+  <!-- black mask -->
+  <path d="M58 84 C70 66 86 60 100 60 C114 60 130 66 142 84 C136 96 122 100 100 100 C78 100 64 96 58 84 Z" fill="#2b2118"/>
+  <!-- muzzle -->
+  <path d="M78 112 C78 100 88 94 100 94 C112 94 122 100 122 112 C122 126 112 134 100 134 C88 134 78 126 78 112 Z" fill="#f4e9d0"/>
+  <circle cx="100" cy="106" r="5" fill="#2b2118"/>
+  <!-- eyes -->
+  <circle cx="80" cy="86" r="7" fill="#c8402e"/>
+  <circle cx="120" cy="86" r="7" fill="#c8402e"/>
+  <circle cx="82" cy="84" r="2.4" fill="#fff"/>
+  <circle cx="122" cy="84" r="2.4" fill="#fff"/>
+  <!-- chest spike -->
+  <path d="M100 150 L112 176 L100 186 L88 176 Z" fill="#f4e9d0" stroke="#2b2118" stroke-width="2"/>
+</svg>
