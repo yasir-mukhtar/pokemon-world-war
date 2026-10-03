@@ -1,15 +1,22 @@
 {
   "name": "pokemon-world-war",
   "version": "1.0.0",
-  "description": "Prototipe fan-made Pokemon World War — pertarungan solo vs AI di browser, tanpa dependensi.",
+  "description": "Prototipe fan-made Pokemon World War — pertarungan solo vs AI 3D di browser (static site).",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "build": "node scripts/build.mjs",
+    "verify": "npm test && npm run build",
+    "deploy": "npm run build && wrangler deploy",
+    "deploy:check": "npm run build && wrangler deploy --dry-run"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "wrangler": "4.127.1"
   }
 }

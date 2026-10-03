@@ -9,6 +9,15 @@ import {
   getCountry,
   getPhase,
 } from './data.js';
+import { LEVEL } from './level.js';
+import {
+  circleIntersectsBox,
+  moveCircle,
+  hasLineOfSight,
+  findPath,
+  segmentBoxT,
+  segmentCircleT,
+} from './collision.js';
 
 export const ARENA = { width: 1000, height: 650 };
 const MAX_DT = 0.1;
@@ -68,11 +77,13 @@ export function normalizeConfig(config = {}) {
   };
 }
 
-function spawnPoint(random, player) {
+function spawnPoint(random, player, obstacles) {
+  const margin = 40;
+  const free = (x, y) =>
+    obstacles.every((o) => !circleIntersectsBox(x, y, ENEMY_BASE.radius, o));
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const edge = Math.floor(random() * 4);
     const t = random();
-    const margin = 40;
     let x;
     let y;
     if (edge === 0) {
@@ -88,29 +99,32 @@ function spawnPoint(random, player) {
       x = margin;
       y = margin + t * (ARENA.height - margin * 2);
     }
-    if (Math.hypot(x - player.x, y - player.y) >= MIN_SPAWN_DIST) return { x, y };
+    if (Math.hypot(x - player.x, y - player.y) >= MIN_SPAWN_DIST && free(x, y)) {
+      return { x, y };
+    }
   }
-  // Cadangan: sudut inset-40 terjauh dari pemain (selalu >= ~500 dari mana pun).
+  // Cadangan: sudut inset-40 valid terjauh dari pemain.
   const corners = [
     { x: 40, y: 40 },
     { x: ARENA.width - 40, y: 40 },
     { x: 40, y: ARENA.height - 40 },
     { x: ARENA.width - 40, y: ARENA.height - 40 },
   ];
-  let best = corners[0];
+  let best = null;
   let bestDist = -1;
   for (const c of corners) {
+    if (!free(c.x, c.y)) continue;
     const d = Math.hypot(c.x - player.x, c.y - player.y);
     if (d > bestDist) {
       bestDist = d;
       best = c;
     }
   }
-  return best;
+  return best ?? corners[0];
 }
 
 function makeEnemy(state, random) {
-  const p = spawnPoint(random, state.player);
+  const p = spawnPoint(random, state.player, state.obstacles);
   const id = state.nextId;
   state.nextId += 1;
   return {
@@ -126,6 +140,9 @@ function makeEnemy(state, random) {
     attackCooldown: 0.9 + random() * 0.6,
     projectileSpeed: ENEMY_BASE.projectileSpeed,
     alive: true,
+    path: null,
+    pathTimer: 0,
+    pathTarget: null,
   };
 }
 
@@ -154,6 +171,8 @@ export function createGame(config = {}, random = Math.random) {
     enemies: [],
     projectiles: [],
     effects: [],
+    obstacles: Object.freeze(LEVEL.obstacles.map((o) => Object.freeze({ ...o }))),
+    levelId: LEVEL.id,
     zone: { ...ZONE },
     elapsed: 0,
     remaining: normalized.durationSeconds,
@@ -179,7 +198,7 @@ function aimTarget(state) {
   for (const enemy of state.enemies) {
     if (!enemy.alive) continue;
     const d = dist(enemy, state.player);
-    if (d < bestDist) {
+    if (d < bestDist && hasLineOfSight(state.player, enemy, state.obstacles)) {
       bestDist = d;
       best = enemy;
     }
@@ -194,6 +213,7 @@ export function getAimTarget(state) {
 
 function fireProjectile(state, from, dir, spec) {
   state.projectiles.push({
+    id: state.nextId++,
     x: from.x,
     y: from.y,
     vx: dir.x * spec.speed,
@@ -233,17 +253,18 @@ export function triggerAttack(state) {
 
 function damageEnemy(state, enemy, amount) {
   enemy.hp -= amount;
-  state.effects.push({ type: 'hit', x: enemy.x, y: enemy.y, radius: 26, ttl: 0.25, maxTtl: 0.25 });
+  state.effects.push({ id: state.nextId++, type: 'hit', x: enemy.x, y: enemy.y, radius: 26, ttl: 0.25, maxTtl: 0.25 });
   if (enemy.hp <= 0) {
     enemy.alive = false;
     state.kills += 1;
-    state.effects.push({ type: 'ko', x: enemy.x, y: enemy.y, radius: 40, ttl: 0.5, maxTtl: 0.5 });
+    state.effects.push({ id: state.nextId++, type: 'ko', x: enemy.x, y: enemy.y, radius: 40, ttl: 0.5, maxTtl: 0.5 });
   }
 }
 
 function damagePlayer(state, amount) {
   state.player.hp -= amount;
   state.effects.push({
+      id: state.nextId++,
     type: 'hit',
     x: state.player.x,
     y: state.player.y,
@@ -276,11 +297,16 @@ export function triggerSkill(state) {
 
   if (skill.id === 'kilat') {
     for (const enemy of state.enemies) {
-      if (enemy.alive && dist(enemy, player) <= skill.radius) {
+      if (
+        enemy.alive &&
+        dist(enemy, player) <= skill.radius &&
+        hasLineOfSight(player, enemy, state.obstacles)
+      ) {
         damageEnemy(state, enemy, skill.damage);
       }
     }
     state.effects.push({
+      id: state.nextId++,
       type: 'ring',
       x: player.x,
       y: player.y,
@@ -291,16 +317,24 @@ export function triggerSkill(state) {
     });
   } else if (skill.id === 'dash') {
     const from = { x: player.x, y: player.y };
-    const nx = clamp(player.x + player.facing.x * skill.distance, player.radius, state.width - player.radius);
-    const ny = clamp(player.y + player.facing.y * skill.distance, player.radius, state.height - player.radius);
+    // Dash melewati collision — titik akhir aktual bisa berhenti sebelum dinding.
+    moveCircle(player, player.facing.x * skill.distance, player.facing.y * skill.distance, {
+      width: state.width,
+      height: state.height,
+    }, state.obstacles);
+    const nx = player.x;
+    const ny = player.y;
     for (const enemy of state.enemies) {
-      if (enemy.alive && pointToSegmentDistance(enemy.x, enemy.y, from.x, from.y, nx, ny) <= skill.width / 2 + enemy.radius) {
+      if (
+        enemy.alive &&
+        pointToSegmentDistance(enemy.x, enemy.y, from.x, from.y, nx, ny) <= skill.width / 2 + enemy.radius &&
+        hasLineOfSight(player, enemy, state.obstacles)
+      ) {
         damageEnemy(state, enemy, skill.damage);
       }
     }
-    player.x = nx;
-    player.y = ny;
     state.effects.push({
+      id: state.nextId++,
       type: 'dash',
       x: from.x,
       y: from.y,
@@ -317,11 +351,16 @@ export function triggerSkill(state) {
       const dx = enemy.x - player.x;
       const dy = enemy.y - player.y;
       const d = Math.hypot(dx, dy);
-      if (d <= skill.range && (d === 0 || (dx * player.facing.x + dy * player.facing.y) / d >= cosHalf)) {
+      if (
+        d <= skill.range &&
+        (d === 0 || (dx * player.facing.x + dy * player.facing.y) / d >= cosHalf) &&
+        hasLineOfSight(player, enemy, state.obstacles)
+      ) {
         damageEnemy(state, enemy, skill.damage);
       }
     }
     state.effects.push({
+      id: state.nextId++,
       type: 'cone',
       x: player.x,
       y: player.y,
@@ -335,7 +374,11 @@ export function triggerSkill(state) {
   } else if (skill.id === 'drain') {
     let hits = 0;
     for (const enemy of state.enemies) {
-      if (enemy.alive && dist(enemy, player) <= skill.radius) {
+      if (
+        enemy.alive &&
+        dist(enemy, player) <= skill.radius &&
+        hasLineOfSight(player, enemy, state.obstacles)
+      ) {
         damageEnemy(state, enemy, skill.damage);
         hits += 1;
       }
@@ -344,6 +387,7 @@ export function triggerSkill(state) {
       player.hp = Math.min(player.maxHp, player.hp + skill.healPerHit * hits);
     }
     state.effects.push({
+      id: state.nextId++,
       type: 'ring',
       x: player.x,
       y: player.y,
@@ -364,10 +408,45 @@ function movePlayer(state, input, dt) {
   if (len > 0) {
     mx /= len;
     my /= len;
-    player.x = clamp(player.x + mx * player.speed * dt, player.radius, state.width - player.radius);
-    player.y = clamp(player.y + my * player.speed * dt, player.radius, state.height - player.radius);
+    moveCircle(player, mx * player.speed * dt, my * player.speed * dt, state, state.obstacles);
     player.facing = { x: mx, y: my };
+    player.moving = true;
+  } else {
+    player.moving = false;
   }
+}
+
+function enemyNavDir(state, enemy, player, dt) {
+  // Dua ambang LOS: tembakan pakai padding tipis, gerak langsung butuh
+  // clearance radius tubuh — sudut yang tampak bebas tetap bisa menyangkut.
+  const shotLos = hasLineOfSight(enemy, player, state.obstacles, 2);
+  const moveLos = hasLineOfSight(enemy, player, state.obstacles, enemy.radius + 2);
+  if (moveLos) {
+    enemy.path = null;
+    enemy.pathTarget = null;
+    const d = dist(enemy, player) || 1;
+    return { x: (player.x - enemy.x) / d, y: (player.y - enemy.y) / d, shotLos };
+  }
+  // Jalur gerak terhalang: ikuti jalur A* — hitung ulang tiap ~0.5s
+  // atau bila pemain jauh bergeser.
+  enemy.pathTimer -= dt;
+  const targetMoved =
+    !enemy.pathTarget || Math.hypot(enemy.pathTarget.x - player.x, enemy.pathTarget.y - player.y) > 60;
+  if (!enemy.path || enemy.pathTimer <= 0 || targetMoved) {
+    enemy.path = findPath(enemy, player, enemy.radius, state.obstacles);
+    enemy.pathTimer = 0.5;
+    enemy.pathTarget = { x: player.x, y: player.y };
+  }
+  while (enemy.path.length && Math.hypot(enemy.path[0].x - enemy.x, enemy.path[0].y - enemy.y) < 12) {
+    enemy.path.shift();
+  }
+  if (enemy.path.length) {
+    const wp = enemy.path[0];
+    const d = Math.hypot(wp.x - enemy.x, wp.y - enemy.y) || 1;
+    return { x: (wp.x - enemy.x) / d, y: (wp.y - enemy.y) / d, shotLos };
+  }
+  const d = dist(enemy, player) || 1;
+  return { x: (player.x - enemy.x) / d, y: (player.y - enemy.y) / d, shotLos };
 }
 
 function updateEnemies(state, dt) {
@@ -375,18 +454,25 @@ function updateEnemies(state, dt) {
   for (const enemy of state.enemies) {
     if (!enemy.alive) continue;
     enemy.attackCooldown = Math.max(0, enemy.attackCooldown - dt);
-    const dx = player.x - enemy.x;
-    const dy = player.y - enemy.y;
-    const d = Math.hypot(dx, dy) || 1;
-    if (d > enemy.attackRange * 0.75) {
-      enemy.x += (dx / d) * enemy.speed * dt;
-      enemy.y += (dy / d) * enemy.speed * dt;
+    const d = dist(enemy, player);
+    const nav = enemyNavDir(state, enemy, player, dt);
+    // Terus bergerak bila belum dalam jarak serang ATAU LOS tembak terhalang.
+    if (d > enemy.attackRange * 0.75 || !nav.shotLos) {
+      moveCircle(
+        enemy,
+        nav.x * enemy.speed * dt,
+        nav.y * enemy.speed * dt,
+        state,
+        state.obstacles,
+      );
     }
-    enemy.x = clamp(enemy.x, enemy.radius, state.width - enemy.radius);
-    enemy.y = clamp(enemy.y, enemy.radius, state.height - enemy.radius);
-    if (d <= enemy.attackRange && enemy.attackCooldown <= 0) {
+    // Jarak & arah tembak dihitung ulang pasca-gerak agar kecepatan konsisten.
+    const dNow = dist(enemy, player);
+    const canShoot = hasLineOfSight(enemy, player, state.obstacles, 2);
+    if (dNow <= enemy.attackRange && enemy.attackCooldown <= 0 && canShoot) {
       enemy.attackCooldown = ENEMY_BASE.attackCooldown;
-      fireProjectile(state, enemy, { x: dx / d, y: dy / d }, {
+      const dd = dNow || 1;
+      fireProjectile(state, enemy, { x: (player.x - enemy.x) / dd, y: (player.y - enemy.y) / dd }, {
         speed: enemy.projectileSpeed,
         damage: enemy.attackDamage,
         team: 'enemy',
@@ -395,7 +481,7 @@ function updateEnemies(state, dt) {
       });
     }
   }
-  // Pemisahan halus antar-musuh agar tidak bertumpuk.
+  // Pemisahan halus antar-musuh agar tidak bertumpuk — lalu tegakkan collider.
   const alive = state.enemies.filter((e) => e.alive);
   for (let i = 0; i < alive.length; i += 1) {
     for (let j = i + 1; j < alive.length; j += 1) {
@@ -414,6 +500,9 @@ function updateEnemies(state, dt) {
       }
     }
   }
+  for (const e of alive) {
+    moveCircle(e, 0, 0, state, state.obstacles); // keluarkan dari collider/batas
+  }
 }
 
 function updateRespawns(state, dt) {
@@ -428,29 +517,56 @@ function updateRespawns(state, dt) {
     state.respawnTimer = ENEMY_RESPAWN;
     const enemy = makeEnemy(state, state.random);
     state.enemies.push(enemy);
-    state.effects.push({ type: 'spawn', x: enemy.x, y: enemy.y, radius: 34, ttl: 0.6, maxTtl: 0.6 });
+    state.effects.push({ id: state.nextId++, type: 'spawn', x: enemy.x, y: enemy.y, radius: 34, ttl: 0.6, maxTtl: 0.6 });
   }
 }
 
 function updateProjectiles(state, dt) {
   const player = state.player;
   for (const p of state.projectiles) {
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.life -= dt;
+    const x2 = p.x + p.vx * dt;
+    const y2 = p.y + p.vy * dt;
+    // Tabrakan sapuan segmen: dinding menahan proyektil, aktor tak tertembus.
+    let tWall = Infinity;
+    for (const o of state.obstacles) {
+      const t = segmentBoxT(p.x, p.y, x2, y2, o);
+      if (t !== null && t < tWall) tWall = t;
+    }
+    let tHit = Infinity;
+    let victim = null;
     if (p.team === 'player') {
       for (const enemy of state.enemies) {
-        if (enemy.alive && Math.hypot(enemy.x - p.x, enemy.y - p.y) <= enemy.radius + p.radius) {
-          damageEnemy(state, enemy, p.damage);
-          p.life = 0;
-          break;
+        if (!enemy.alive) continue;
+        const t = segmentCircleT(p.x, p.y, x2, y2, enemy.x, enemy.y, enemy.radius + p.radius);
+        if (t !== null && t < tHit) {
+          tHit = t;
+          victim = enemy;
         }
       }
-    } else if (Math.hypot(player.x - p.x, player.y - p.y) <= player.radius + p.radius) {
-      damagePlayer(state, p.damage);
+    } else {
+      const t = segmentCircleT(p.x, p.y, x2, y2, player.x, player.y, player.radius + p.radius);
+      if (t !== null) {
+        tHit = t;
+        victim = player;
+      }
+    }
+    if (victim && tHit <= tWall) {
+      p.x = p.x + (x2 - p.x) * tHit;
+      p.y = p.y + (y2 - p.y) * tHit;
+      if (p.team === 'player') damageEnemy(state, victim, p.damage);
+      else damagePlayer(state, p.damage);
       p.life = 0;
       if (state.status !== 'running') return;
+    } else if (tWall <= 1) {
+      p.x = p.x + (x2 - p.x) * Math.max(0, tWall - 0.02);
+      p.y = p.y + (y2 - p.y) * Math.max(0, tWall - 0.02);
+      p.life = 0;
+      state.effects.push({ id: state.nextId++, type: 'hit', x: p.x, y: p.y, radius: 14, ttl: 0.2, maxTtl: 0.2 });
+    } else {
+      p.x = x2;
+      p.y = y2;
     }
+    p.life -= dt;
     if (p.x < -20 || p.x > state.width + 20 || p.y < -20 || p.y > state.height + 20) {
       p.life = 0;
     }

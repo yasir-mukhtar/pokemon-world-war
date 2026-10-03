@@ -63,7 +63,8 @@ export const CHARACTERS = [
     attackCooldown: 0.7,
     projectileSpeed: 480,
     color: '#e2703a',
-    portrait: 'assets/charizard.svg',
+    portrait: 'assets/characters/charizard-portrait.png',
+    referenceSheet: 'assets/reference/charizard-sheet.jpg',
     skill: {
       id: 'api',
       name: 'Semburan Api',
@@ -88,7 +89,8 @@ export const CHARACTERS = [
     attackCooldown: 0.5,
     projectileSpeed: 500,
     color: '#7b5ea7',
-    portrait: 'assets/gengar.svg',
+    portrait: 'assets/characters/gengar-portrait.png',
+    referenceSheet: 'assets/reference/gengar-sheet.jpg',
     skill: {
       id: 'drain',
       name: 'Sedot Bayangan',

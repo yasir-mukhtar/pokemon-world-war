@@ -5,13 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Pokemon World War — Komando Pertempuran</title>
   <meta name="description" content="Prototipe fan-made: pilih Pokemon, pertahankan atau rebut kota melawan AI. Tidak resmi, tanpa multiplayer daring." />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#f7f1e2" />
+  <meta name="application-name" content="Pokemon World War" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/game-icon-192.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16.png" />
+  <link rel="shortcut icon" href="assets/icons/favicon.ico" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png" />
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
   <div class="shell" id="setup-shell">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
+        <img class="brand-mark" src="assets/icons/game-icon-192.png" width="40" height="40" alt="" aria-hidden="true" />
         <span class="brand-name">Pokemon <strong>World War</strong></span>
       </div>
       <span class="badge-solo">Solo vs AI</span>
@@ -92,7 +101,8 @@
           <dl class="briefing-meta" id="briefing-meta"></dl>
           <p class="objective-line" id="objective-line"></p>
           <button type="button" class="cta" id="btn-start">Mulai perang solo</button>
-          <p class="fine-print">Fan-made · Tanpa multiplayer daring · Simpan zona, menangkan perang.</p>
+          <div class="gl-error" id="gl-error" hidden role="alert">Kartu grafis/browser ini tidak mendukung WebGL2 — arena 3D tidak bisa dimuat. Coba browser modern dengan akselerasi perangkat keras aktif.</div>
+          <p class="fine-print">Fan-made · Tanpa multiplayer daring · Arena 3D — Alun-alun (butuh WebGL2).</p>
         </div>
       </aside>
     </div>
@@ -120,6 +130,8 @@
         <span class="cs-keys" id="cs-keys"></span>
         <span class="cs-status"><span id="cs-hp"></span><span class="cs-sep" aria-hidden="true">&middot;</span><span id="cs-skill"></span></span>
       </div>
+
+      <div class="gl-error gl-error-arena" id="gl-error-arena" hidden role="alert">Konteks grafis WebGL hilang — permainan dijeda. Muat ulang halaman untuk memulihkan.</div>
 
       <div class="canvas-wrap" id="canvas-wrap">
         <canvas id="game-canvas"></canvas>

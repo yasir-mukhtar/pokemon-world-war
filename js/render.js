@@ -1,452 +1,618 @@
-// Renderer canvas — top-down arena kota dengan gaya peta taktis.
+// Renderer 3D Three.js — arena "Alun-alun" low-poly.
+// Pemetaan: x/y logis (ruang 2D mesin) -> worldX/worldZ; y dunia = vertikal.
+// Gerak ground-plane adalah 3D nyata (MOBA top-down): tidak ada terbang/lompat.
+import * as THREE from '../vendor/three/three.module.js';
+import { LEVEL } from './level.js';
+import { createCharacterModel, createEnemyModel, animateCharacterModel } from './models3d.js';
 import { getAimTarget } from './game-engine.js';
 
-// PRNG deterministik sederhana untuk tata letak pemandangan.
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function () {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+const S = LEVEL.scale;
+const toWorldX = (x) => (x - LEVEL.width / 2) * S;
+const toWorldZ = (y) => (y - LEVEL.height / 2) * S;
+const GROUND_W = LEVEL.width * S;
+const GROUND_H = LEVEL.height * S;
+
+const std = (color, opts = {}) =>
+  new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.9, ...opts });
+
+function disposeDeep(obj) {
+  obj.traverse((n) => {
+    if (n.geometry) n.geometry.dispose();
+    if (n.material) {
+      for (const m of Array.isArray(n.material) ? n.material : [n.material]) m.dispose();
+    }
+  });
 }
 
-export function createScenery(seed = 7) {
-  const rnd = mulberry32(seed);
-  const buildings = [];
-  const trees = [];
-  const craters = [];
-  // Blok kota di sudut-sudut, jauh dari zona pusat.
-  const zones = [
-    { x0: 40, y0: 40, x1: 300, y1: 180 },
-    { x0: 660, y0: 40, x1: 960, y1: 180 },
-    { x0: 40, y0: 430, x1: 280, y1: 610 },
-    { x0: 700, y0: 430, x1: 960, y1: 610 },
+function buildLevelMesh(state) {
+  const g = new THREE.Group();
+  // Tanah dasar.
+  const ground = new THREE.Mesh(
+    new THREE.BoxGeometry(GROUND_W + 4, 0.4, GROUND_H + 4),
+    std('#e9dfc2'),
+  );
+  ground.position.y = -0.21;
+  ground.receiveShadow = true;
+  g.add(ground);
+
+  // Jalan utama (bidang tipis di atas tanah).
+  const roadMat = std('#d6c8a4');
+  const roadEW = new THREE.Mesh(new THREE.BoxGeometry(GROUND_W, 0.04, 44 * S), roadMat);
+  roadEW.position.set(0, 0.02, toWorldZ(308));
+  roadEW.receiveShadow = true;
+  const roadNS = new THREE.Mesh(new THREE.BoxGeometry(60 * S, 0.04, GROUND_H), roadMat);
+  roadNS.position.set(toWorldX(500), 0.021, 0);
+  roadNS.receiveShadow = true;
+  g.add(roadEW, roadNS);
+
+  // Alun-alun: paving melingkar di sekitar zona.
+  const plaza = new THREE.Mesh(
+    new THREE.CylinderGeometry(4.6, 4.6, 0.06, 36),
+    std('#ddd0ae'),
+  );
+  plaza.position.set(toWorldX(500), 0.03, toWorldZ(300));
+  plaza.receiveShadow = true;
+  g.add(plaza);
+
+  // Dinding pembatas rendah — jaga pandangan ke dalam arena.
+  const wallMat = std('#b9a77f');
+  const wh = 0.5;
+  const walls = [
+    [GROUND_W, 0.3, 0, -GROUND_H / 2 - 0.15],
+    [GROUND_W, 0.3, 0, GROUND_H / 2 + 0.15],
+    [0.3, GROUND_H, -GROUND_W / 2 - 0.15, 0],
+    [0.3, GROUND_H, GROUND_W / 2 + 0.15, 0],
   ];
-  for (const z of zones) {
-    const count = 3 + Math.floor(rnd() * 3);
-    for (let i = 0; i < count; i += 1) {
-      const w = 34 + rnd() * 56;
-      const h = 26 + rnd() * 44;
-      buildings.push({
-        x: z.x0 + rnd() * Math.max(1, z.x1 - z.x0 - w),
-        y: z.y0 + rnd() * Math.max(1, z.y1 - z.y0 - h),
-        w,
-        h,
-        shade: 0.75 + rnd() * 0.25,
+  for (const [w, d, x, z] of walls) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), wallMat);
+    wall.position.set(x, wh / 2, z);
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    g.add(wall);
+  }
+
+  // Enam obstacle solid — kotak 3D sesuai footprint logis.
+  for (const o of state.obstacles) {
+    const h = o.height * S;
+    const box = new THREE.Mesh(new THREE.BoxGeometry(o.w * S, h, o.h * S), std(o.color));
+    box.position.set(toWorldX(o.x + o.w / 2), h / 2, toWorldZ(o.y + o.h / 2));
+    box.userData.obstacleId = o.id;
+    box.castShadow = true;
+    box.receiveShadow = true;
+    g.add(box);
+    if (o.kind === 'building') {
+      // Atap sedikit lebih gelap agar bentuk terbaca.
+      const roof = new THREE.Mesh(
+        new THREE.BoxGeometry(o.w * S * 0.9, 0.12, o.h * S * 0.9),
+        std('#6e6046'),
+      );
+      roof.position.set(box.position.x, h + 0.06, box.position.z);
+      roof.castShadow = true;
+      g.add(roof);
+    }
+  }
+
+  // Dekorasi di LUAR batas main (pohon) — jelas tidak dapat dilewati.
+  const treeMat = std('#6d8a4f');
+  const trunkMat = std('#7a6248');
+  const treeSpots = [
+    [-GROUND_W / 2 - 1.2, -GROUND_H / 2 - 1.0],
+    [GROUND_W / 2 + 1.2, -GROUND_H / 2 - 1.0],
+    [-GROUND_W / 2 - 1.2, GROUND_H / 2 + 1.0],
+    [GROUND_W / 2 + 1.2, GROUND_H / 2 + 1.0],
+    [-GROUND_W / 2 - 1.4, 0],
+    [GROUND_W / 2 + 1.4, 0],
+  ];
+  for (const [x, z] of treeSpots) {
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.6, 6), trunkMat);
+    trunk.position.set(x, 0.3, z);
+    trunk.castShadow = true;
+    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), treeMat);
+    crown.position.set(x, 0.95, z);
+    crown.castShadow = true;
+    g.add(trunk, crown);
+  }
+  // Zona capture: ring torus + panggung silinder (progres diisi render()).
+  const zc = { x: toWorldX(state.zone.x), z: toWorldZ(state.zone.y) };
+  const platform = new THREE.Mesh(
+    new THREE.CylinderGeometry(state.zone.radius * S, state.zone.radius * S, 0.1, 40),
+    std('#cfc09a'),
+  );
+  platform.position.set(zc.x, 0.05, zc.z);
+  platform.receiveShadow = true;
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(state.zone.radius * S, 0.06, 10, 48),
+    std('#16736b', { emissive: '#16736b', emissiveIntensity: 0.35 }),
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.set(zc.x, 0.12, zc.z);
+  const contestRing = new THREE.Mesh(
+    new THREE.TorusGeometry(state.zone.contestRadius * S, 0.03, 8, 48),
+    std('#1f1a10'),
+  );
+  contestRing.rotation.x = Math.PI / 2;
+  contestRing.position.set(zc.x, 0.06, zc.z);
+  contestRing.material.transparent = true;
+  contestRing.material.opacity = 0.35;
+  g.add(platform, ring, contestRing);
+  g.userData = { ring, contestRing, zoneCenter: zc };
+  return g;
+}
+
+// Pie progres zona — dibangun ulang hanya saat sudut berubah bermakna.
+function makeProgressSlice(radius, frac) {
+  const geo = new THREE.CircleGeometry(radius, 40, -Math.PI / 2, Math.max(0.001, frac * Math.PI * 2));
+  const m = new THREE.Mesh(geo, std('#f2c230', { emissive: '#d9a50f', emissiveIntensity: 0.4 }));
+  m.rotation.x = -Math.PI / 2;
+  return m;
+}
+
+function makeHpBar() {
+  const g = new THREE.Group();
+  const bg = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.09, 0.02), new THREE.MeshBasicMaterial({ color: '#2b2118' }));
+  const fill = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.09, 0.03), new THREE.MeshBasicMaterial({ color: '#c0392b' }));
+  g.add(bg, fill);
+  g.rotation.x = -0.55; // menghadap kamera (yaw kamera tetap)
+  g.userData.fill = fill;
+  return g;
+}
+
+function makeTeamRing(color) {
+  const r = new THREE.Mesh(
+    new THREE.TorusGeometry(0.55, 0.05, 8, 32),
+    new THREE.MeshBasicMaterial({ color }),
+  );
+  r.rotation.x = Math.PI / 2;
+  r.position.y = 0.04;
+  return r;
+}
+
+function makeProjectileMesh(team, characterId) {
+  let color = team === 'player' ? '#f2c230' : '#c0392b';
+  if (team === 'player' && characterId === 'charizard') color = '#e2703a';
+  if (team === 'player' && characterId === 'gengar') color = '#5f4387';
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16, 8, 6),
+    std(color, { emissive: color, emissiveIntensity: 0.8 }),
+  );
+  m.castShadow = true;
+  if (team === 'player' && characterId === 'charizard') {
+    // Bola api: inti kuning emisif + kerucut api ke belakang.
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 8, 6),
+      std('#f2c230', { emissive: '#f2c230', emissiveIntensity: 1.1 }),
+    );
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.12, 0.3, 6),
+      new THREE.MeshBasicMaterial({ color: '#e2703a', transparent: true, opacity: 0.7 }),
+    );
+    flame.rotation.x = -Math.PI / 2;
+    flame.position.z = -0.22;
+    m.add(core, flame);
+  }
+  if (team === 'player' && characterId === 'gengar') {
+    // Orb bayangan: halo torus ungu emisif mengelilingi bola gelap.
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(0.24, 0.035, 8, 20),
+      new THREE.MeshBasicMaterial({ color: '#7b5ea7', transparent: true, opacity: 0.75 }),
+    );
+    halo.rotation.x = Math.PI / 2;
+    m.add(halo);
+  }
+  const trail = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.01, 0.5, 6),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55 }),
+  );
+  trail.rotation.x = Math.PI / 2; // sumbu silinder Y -> Z lokal (panjang ke belakang)
+  trail.position.z = -0.3;
+  m.add(trail);
+  m.userData.trail = trail;
+  return m;
+}
+
+function makeEffectMesh(ef) {
+  const c = ef.color ?? '#f2c230';
+  if (ef.type === 'ring' || ef.type === 'spawn' || ef.type === 'ko') {
+    const m = new THREE.Mesh(
+      new THREE.TorusGeometry((ef.radius ?? 30) * S, 0.05, 8, 40),
+      new THREE.MeshBasicMaterial({ color: ef.type === 'ring' ? c : '#c0392b', transparent: true }),
+    );
+    m.rotation.x = Math.PI / 2;
+    return m;
+  }
+  if (ef.type === 'cone') {
+    const r = (ef.radius ?? 200) * S;
+    const geo = new THREE.CircleGeometry(r, 20, Math.PI / 2 - ef.angle / 2, ef.angle);
+    const flat = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c, transparent: true }));
+    flat.rotation.x = -Math.PI / 2; // bidang XY -> XZ; sektor menghadap -Z (utara)
+    const m = new THREE.Group();
+    m.add(flat);
+    // Jilatan api 3D tersebar di sektor (arah default -Z, diputar group).
+    const flameMat = new THREE.MeshBasicMaterial({ color: '#f2c230', transparent: true });
+    for (let i = 0; i < 8; i += 1) {
+      const a = (i / 7 - 0.5) * (ef.angle ?? 0.8);
+      const rr = r * (0.3 + 0.55 * (((i * 37) % 11) / 11));
+      const puff = new THREE.Mesh(
+        new THREE.ConeGeometry(0.07 + 0.03 * (i % 3), 0.3, 5),
+        i % 2 ? flameMat : new THREE.MeshBasicMaterial({ color: c, transparent: true }),
+      );
+      puff.position.set(Math.sin(a) * rr, 0.06, -Math.cos(a) * rr);
+      puff.rotation.x = 0.4;
+      m.add(puff);
+    }
+    m.userData.flat = flat;
+    return m;
+  }
+  if (ef.type === 'dash') {
+    const len = Math.hypot((ef.x2 - ef.x) * S, (ef.y2 - ef.y) * S) || 0.1;
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.16, len),
+      new THREE.MeshBasicMaterial({ color: c, transparent: true }),
+    );
+    return m;
+  }
+  // hit
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.3, 8, 6),
+    new THREE.MeshBasicMaterial({ color: '#f7f1e2', transparent: true }),
+  );
+  return m;
+}
+
+// Efek bisa berupa Group (cone) — set opacity aman pada semua material turunan.
+function setFxOpacity(obj, value) {
+  obj.traverse((n) => {
+    if (!n.material) return;
+    for (const m of Array.isArray(n.material) ? n.material : [n.material]) {
+      m.transparent = true;
+      m.opacity = value;
+    }
+  });
+}
+
+export function createArenaRenderer(canvas) {
+  // Wajib WebGL2 — tanpa fallback 2D.
+  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
+  if (!gl) throw new Error('WebGL2 tidak tersedia di browser ini');
+  const renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true });
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#d8e6df');
+  scene.fog = new THREE.Fog('#d8e6df', 34, 85);
+
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 150);
+  const lookTarget = new THREE.Vector3(0, 0.7, -2.5);
+
+  const hemi = new THREE.HemisphereLight('#fdf4dd', '#6d7a68', 0.95);
+  const sun = new THREE.DirectionalLight('#ffe3b3', 1.9);
+  sun.position.set(14, 20, 8);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -18;
+  sun.shadow.camera.right = 18;
+  sun.shadow.camera.top = 18;
+  sun.shadow.camera.bottom = -18;
+  sun.shadow.camera.near = 2;
+  sun.shadow.camera.far = 60;
+  sun.shadow.bias = -0.0008;
+  scene.add(hemi, sun);
+
+  let levelGroup = null;
+  let zoneSlice = null;
+  let zoneSliceFrac = -1;
+  let playerMesh = null;
+  const enemyMeshes = new Map();
+  const projMeshes = new Map();
+  const fxMeshes = new Map();
+  let camInit = false;
+
+  function syncEntities(state) {
+    // Pemain.
+    if (!playerMesh || playerMesh.userData.charId !== state.player.character.id) {
+      if (playerMesh) {
+        scene.remove(playerMesh);
+        disposeDeep(playerMesh);
+      }
+      const model = createCharacterModel(state.player.character.id);
+      playerMesh = model.group;
+      playerMesh.userData.charId = state.player.character.id;
+      playerMesh.userData.legs = model.legs;
+      playerMesh.add(makeTeamRing('#16736b'));
+      scene.add(playerMesh);
+    }
+    // Musuh — sinkron by id.
+    const aliveIds = new Set();
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      aliveIds.add(e.id);
+      if (!enemyMeshes.has(e.id)) {
+        const m = createEnemyModel().group;
+        m.userData.id = e.id;
+        m.add(makeTeamRing('#c0392b'));
+        const hp = makeHpBar();
+        hp.position.y = 1.85;
+        m.add(hp);
+        m.userData.hp = hp;
+        scene.add(m);
+        enemyMeshes.set(e.id, m);
+      }
+    }
+    for (const [id, m] of enemyMeshes) {
+      if (!aliveIds.has(id)) {
+        scene.remove(m);
+        disposeDeep(m);
+        enemyMeshes.delete(id);
+      }
+    }
+    // Proyektil.
+    const projIds = new Set();
+    for (const p of state.projectiles) {
+      projIds.add(p.id);
+      if (!projMeshes.has(p.id)) {
+        const m = makeProjectileMesh(p.team, state.player.character.id);
+        scene.add(m);
+        projMeshes.set(p.id, m);
+      }
+    }
+    for (const [id, m] of projMeshes) {
+      if (!projIds.has(id)) {
+        scene.remove(m);
+        disposeDeep(m);
+        projMeshes.delete(id);
+      }
+    }
+    // Efek.
+    const fxIds = new Set();
+    for (const ef of state.effects) {
+      fxIds.add(ef.id);
+      if (!fxMeshes.has(ef.id)) {
+        const m = makeEffectMesh(ef);
+        if (ef.type === 'dash') {
+          m.position.set(toWorldX((ef.x + ef.x2) / 2), 0.15, toWorldZ((ef.y + ef.y2) / 2));
+          m.rotation.y = Math.atan2(ef.x2 - ef.x, ef.y2 - ef.y);
+        } else if (ef.type === 'cone') {
+          m.position.set(toWorldX(ef.x), 0.12, toWorldZ(ef.y));
+          m.rotation.y = Math.atan2(-ef.dir.x, -ef.dir.y); // bisector default -Z -> arah world
+        } else {
+          m.position.set(toWorldX(ef.x), 0.1, toWorldZ(ef.y));
+        }
+        scene.add(m);
+        fxMeshes.set(ef.id, m);
+      }
+    }
+    for (const [id, m] of fxMeshes) {
+      if (!fxIds.has(id)) {
+        scene.remove(m);
+        disposeDeep(m);
+        fxMeshes.delete(id);
+      }
+    }
+  }
+
+  function animateEntities(state) {
+    const t = state.elapsed;
+    const p = state.player;
+    playerMesh.position.set(toWorldX(p.x), 0, toWorldZ(p.y));
+    playerMesh.rotation.y = Math.atan2(p.facing.x, p.facing.y);
+    const moving = p.moving ? 1 : 0;
+    playerMesh.position.y = moving ? Math.abs(Math.sin(t * 9)) * 0.08 : Math.sin(t * 2.2) * 0.02 + 0.02;
+    const legs = playerMesh.userData.legs;
+    if (legs) {
+      const swing = moving ? Math.sin(t * 11) * 0.55 : Math.sin(t * 2) * 0.06;
+      legs[0].rotation.x = swing;
+      legs[1].rotation.x = -swing;
+    }
+    // Pose referensi (Charizard/Gengar) — semua berbasis state.elapsed:
+    // jeda membekukan animasi; hurt/faint mengikuti HP simulasi.
+    const pud = playerMesh.userData;
+    if (pud.lastHp == null) pud.lastHp = p.hp;
+    if (p.hp < pud.lastHp) pud.hurtUntil = t + 0.22;
+    pud.lastHp = p.hp;
+    animateCharacterModel(playerMesh, {
+      time: t,
+      moving: !!moving,
+      attack: p.character.attackCooldown ? p.attackCooldown / p.character.attackCooldown : 0,
+      skill: p.character.skill?.cooldown ? p.skillCooldown / p.character.skill.cooldown : 0,
+      hurt: Math.max(0, (pud.hurtUntil ?? 0) - t) / 0.22,
+      fainted: p.hp <= 0,
+    });
+    for (const [id, m] of enemyMeshes) {
+      const e = state.enemies.find((en) => en.id === id);
+      if (!e) continue;
+      m.position.set(toWorldX(e.x), 0, toWorldZ(e.y));
+      const dx = p.x - e.x;
+      const dz = p.y - e.y;
+      m.rotation.y = Math.atan2(dx, dz);
+      m.position.y = Math.abs(Math.sin(t * 8 + id)) * 0.06;
+      const bar = m.userData.hp;
+      if (bar) {
+        const frac = Math.max(0, e.hp / e.maxHp);
+        bar.userData.fill.scale.x = frac;
+        bar.userData.fill.position.x = -(1 - frac) * 0.45;
+      }
+    }
+    for (const [id, m] of projMeshes) {
+      const p2 = state.projectiles.find((pr) => pr.id === id);
+      if (!p2) continue;
+      m.position.set(toWorldX(p2.x), 0.45, toWorldZ(p2.y));
+      m.rotation.y = Math.atan2(p2.vx, p2.vy); // trail lokal -Z mengarah ke belakang lintasan
+    }
+    for (const [id, m] of fxMeshes) {
+      const ef = state.effects.find((f) => f.id === id);
+      if (!ef) continue;
+      const k = 1 - ef.ttl / ef.maxTtl;
+      setFxOpacity(m, Math.max(0, 1 - k));
+      if (ef.type === 'ring' || ef.type === 'ko') {
+        const s = 0.4 + 0.6 * k;
+        m.scale.set(s, s, s);
+      } else if (ef.type === 'spawn') {
+        const s = Math.max(0.05, 1 - k);
+        m.scale.set(s, s, s);
+      } else if (ef.type === 'hit') {
+        m.scale.setScalar(0.5 + k * 1.4);
+      }
+    }
+    // Progres zona + status perebutan.
+    const frac = state.captureTarget > 0 ? state.captured / state.captureTarget : 0;
+    const q = Math.floor(frac * 90) / 90; // 4° per langkah
+    if (Math.abs(q - zoneSliceFrac) > 1e-9) {
+      zoneSliceFrac = q;
+      if (zoneSlice) {
+        levelGroup.remove(zoneSlice);
+        disposeDeep(zoneSlice);
+      }
+      zoneSlice = makeProgressSlice(state.zone.radius * S * 0.9, frac);
+      zoneSlice.position.set(levelGroup.userData.zoneCenter.x, 0.11, levelGroup.userData.zoneCenter.z);
+      levelGroup.add(zoneSlice);
+    }
+    const zr = levelGroup.userData.ring;
+    zr.material.color.set(state.contested ? '#c0392b' : '#16736b');
+    zr.material.emissive.set(state.contested ? '#c0392b' : '#16736b');
+    zr.scale.setScalar(1 + Math.sin(t * 3) * 0.02);
+    // Garis bidik sederhana: tandai target aim dengan ring kecil.
+    const target = getAimTarget(state);
+    if (!levelGroup.userData.aimRing) {
+      const ar = new THREE.Mesh(
+        new THREE.TorusGeometry(0.5, 0.04, 8, 28),
+        new THREE.MeshBasicMaterial({ color: '#c0392b', transparent: true, opacity: 0.8 }),
+      );
+      ar.rotation.x = Math.PI / 2;
+      ar.position.y = 0.06;
+      levelGroup.add(ar);
+      levelGroup.userData.aimRing = ar;
+    }
+    levelGroup.userData.aimRing.visible = !!target;
+    if (target) {
+      levelGroup.userData.aimRing.position.set(toWorldX(target.x), 0.06, toWorldZ(target.y));
+    }
+  }
+
+  function updateCamera(state, dt) {
+    const px = toWorldX(state.player.x);
+    const pz = toWorldZ(state.player.y);
+    const want = new THREE.Vector3(px, 12, pz + 11);
+    const wantLook = new THREE.Vector3(px, 0.7, pz - 2.5);
+    if (!camInit) {
+      camera.position.copy(want);
+      lookTarget.copy(wantLook);
+      camInit = true;
+    } else {
+      const k = 1 - Math.exp(-6 * dt);
+      camera.position.lerp(want, k);
+      lookTarget.lerp(wantLook, k);
+    }
+    camera.lookAt(lookTarget);
+  }
+
+  return {
+    start(state) {
+      if (levelGroup) {
+        scene.remove(levelGroup);
+        disposeDeep(levelGroup);
+      }
+      for (const m of enemyMeshes.values()) { scene.remove(m); disposeDeep(m); }
+      enemyMeshes.clear();
+      for (const m of projMeshes.values()) { scene.remove(m); disposeDeep(m); }
+      projMeshes.clear();
+      for (const m of fxMeshes.values()) { scene.remove(m); disposeDeep(m); }
+      fxMeshes.clear();
+      if (playerMesh) { scene.remove(playerMesh); disposeDeep(playerMesh); playerMesh = null; }
+      levelGroup = buildLevelMesh(state);
+      zoneSlice = null;
+      zoneSliceFrac = -1;
+      scene.add(levelGroup);
+      camInit = false;
+      syncEntities(state);
+      updateCamera(state, 1);
+    },
+    render(state, dt) {
+      if (!levelGroup) return;
+      syncEntities(state);
+      animateEntities(state);
+      updateCamera(state, dt);
+      // Jangan render ke konteks yang hilang (jendela antara lose dan event).
+      if (renderer.getContext().isContextLost()) return;
+      renderer.render(scene, camera);
+    },
+    resize(cssWidth, cssHeight) {
+      camera.aspect = cssWidth / cssHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(cssWidth, cssHeight, false);
+    },
+    dispose() {
+      if (levelGroup) { scene.remove(levelGroup); disposeDeep(levelGroup); levelGroup = null; }
+      if (playerMesh) { scene.remove(playerMesh); disposeDeep(playerMesh); playerMesh = null; }
+      for (const m of enemyMeshes.values()) disposeDeep(m);
+      for (const m of projMeshes.values()) disposeDeep(m);
+      for (const m of fxMeshes.values()) disposeDeep(m);
+      enemyMeshes.clear();
+      projMeshes.clear();
+      fxMeshes.clear();
+      renderer.dispose();
+    },
+    getDebugInfo() {
+      let meshes = 0;
+      let shadowCasters = 0;
+      scene.traverse((n) => {
+        if (n.isMesh) meshes += 1;
+        if (n.castShadow) shadowCasters += 1;
       });
-    }
-  }
-  for (let i = 0; i < 12; i += 1) {
-    const x = 60 + rnd() * 880;
-    const y = 60 + rnd() * 530;
-    if (Math.hypot(x - 500, y - 300) < 190) continue;
-    trees.push({ x, y, r: 9 + rnd() * 10 });
-  }
-  for (let i = 0; i < 6; i += 1) {
-    const x = 80 + rnd() * 840;
-    const y = 80 + rnd() * 490;
-    if (Math.hypot(x - 500, y - 300) < 160) continue;
-    craters.push({ x, y, r: 12 + rnd() * 16 });
-  }
-  return { buildings, trees, craters };
-}
-
-function drawTerrain(ctx, state, scenery, time) {
-  const { width, height } = state;
-  // Tanah dasar gading.
-  ctx.fillStyle = '#efe6cd';
-  ctx.fillRect(0, 0, width, height);
-  // Kertas grafik halus.
-  ctx.strokeStyle = 'rgba(31,26,16,0.05)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = 0; x <= width; x += 40) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-  }
-  for (let y = 0; y <= height; y += 40) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-  }
-  ctx.stroke();
-  // Jalan utama.
-  ctx.fillStyle = '#e2d5b4';
-  ctx.fillRect(0, 286, width, 44);
-  ctx.fillRect(470, 0, 60, height);
-  ctx.strokeStyle = 'rgba(31,26,16,0.22)';
-  ctx.setLineDash([14, 12]);
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, 308);
-  ctx.lineTo(width, 308);
-  ctx.moveTo(500, 0);
-  ctx.lineTo(500, height);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  // Kawah.
-  for (const c of scenery.craters) {
-    ctx.fillStyle = '#d9cba7';
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(31,26,16,0.3)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(31,26,16,0.12)';
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r * 0.55, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Bangunan (dekoratif, tidak menghalangi gerakan).
-  for (const b of scenery.buildings) {
-    ctx.fillStyle = `rgba(201, 180, 134, ${b.shade})`;
-    ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = 'rgba(31,26,16,0.5)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(b.x, b.y, b.w, b.h);
-    ctx.fillStyle = 'rgba(31,26,16,0.18)';
-    ctx.fillRect(b.x + 4, b.y + 4, b.w - 8, 5);
-  }
-  // Pepohonan.
-  for (const t of scenery.trees) {
-    ctx.fillStyle = '#9aa86a';
-    ctx.beginPath();
-    ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(31,26,16,0.4)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  }
-  // Vignette tepi.
-  const grad = ctx.createRadialGradient(500, 325, 280, 500, 325, 620);
-  grad.addColorStop(0, 'rgba(0,0,0,0)');
-  grad.addColorStop(1, 'rgba(31,26,16,0.18)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, height);
-  void time;
-}
-
-function drawZone(ctx, state, time) {
-  const z = state.zone;
-  const pulse = 1 + Math.sin(time * 3) * 0.02;
-  const contest = state.contested;
-  // Radius perebutan luar.
-  ctx.beginPath();
-  ctx.arc(z.x, z.y, z.contestRadius, 0, Math.PI * 2);
-  ctx.strokeStyle = contest ? 'rgba(192,57,43,0.35)' : 'rgba(22,115,107,0.25)';
-  ctx.setLineDash([6, 8]);
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.setLineDash([]);
-  // Cincin utama.
-  ctx.beginPath();
-  ctx.arc(z.x, z.y, z.radius * pulse, 0, Math.PI * 2);
-  ctx.fillStyle = contest ? 'rgba(192,57,43,0.10)' : 'rgba(22,115,107,0.12)';
-  ctx.fill();
-  ctx.strokeStyle = contest ? '#c0392b' : '#16736b';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  // Isi progres capture.
-  const frac = state.captureTarget > 0 ? state.captured / state.captureTarget : 0;
-  if (frac > 0) {
-    ctx.beginPath();
-    ctx.moveTo(z.x, z.y);
-    ctx.arc(z.x, z.y, z.radius * 0.96, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(242,194,48,0.35)';
-    ctx.fill();
-  }
-  // Penanda pusat.
-  ctx.fillStyle = '#1f1a10';
-  ctx.beginPath();
-  ctx.arc(z.x, z.y, 4, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawPlayerSilhouette(ctx, p, time) {
-  const c = p.character;
-  const bob = Math.sin(time * 6) * 1.5;
-  ctx.save();
-  ctx.translate(p.x, p.y + bob);
-  // Bayangan.
-  ctx.fillStyle = 'rgba(31,26,16,0.22)';
-  ctx.beginPath();
-  ctx.ellipse(0, p.radius * 0.9 - bob, p.radius * 0.95, p.radius * 0.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = c.color;
-  ctx.strokeStyle = '#1f1a10';
-  ctx.lineWidth = 2.5;
-  if (c.id === 'pikachu') {
-    // Telinga.
-    ctx.beginPath();
-    ctx.moveTo(-p.radius - 2, -p.radius - 12);
-    ctx.lineTo(-p.radius + 4, -p.radius + 2);
-    ctx.lineTo(-p.radius - 8, -p.radius + 4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(p.radius + 2, -p.radius - 12);
-    ctx.lineTo(p.radius - 4, -p.radius + 2);
-    ctx.lineTo(p.radius + 8, -p.radius + 4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#c0392b';
-    ctx.beginPath();
-    ctx.arc(-p.radius * 0.55, p.radius * 0.25, 3.4, 0, Math.PI * 2);
-    ctx.arc(p.radius * 0.55, p.radius * 0.25, 3.4, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (c.id === 'lucario') {
-    ctx.beginPath();
-    ctx.moveTo(-p.radius - 3, -p.radius - 10);
-    ctx.lineTo(-p.radius + 5, -p.radius + 4);
-    ctx.lineTo(-p.radius - 7, -p.radius + 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(p.radius + 3, -p.radius - 10);
-    ctx.lineTo(p.radius - 5, -p.radius + 4);
-    ctx.lineTo(p.radius + 7, -p.radius + 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#f4e9d0';
-    ctx.beginPath();
-    ctx.arc(0, 3, p.radius * 0.45, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (c.id === 'charizard') {
-    // Sayap.
-    ctx.beginPath();
-    ctx.moveTo(-p.radius - 16, -4);
-    ctx.lineTo(-p.radius + 2, -p.radius);
-    ctx.lineTo(-p.radius - 4, 6);
-    ctx.closePath();
-    ctx.fillStyle = '#3a7a5c';
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(p.radius + 16, -4);
-    ctx.lineTo(p.radius - 2, -p.radius);
-    ctx.lineTo(p.radius + 4, 6);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = c.color;
-    ctx.beginPath();
-    ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#f7ddae';
-    ctx.beginPath();
-    ctx.arc(0, 4, p.radius * 0.5, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    // Gengar — gumpalan berduri.
-    ctx.beginPath();
-    for (let i = 0; i < 10; i += 1) {
-      const a = (i / 10) * Math.PI * 2;
-      const r = i % 2 === 0 ? p.radius + 5 : p.radius;
-      const px = Math.cos(a) * r;
-      const py = Math.sin(a) * r;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#c0392b';
-    ctx.beginPath();
-    ctx.arc(-5, -3, 2.6, 0, Math.PI * 2);
-    ctx.arc(5, -3, 2.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Arah hadap.
-  ctx.strokeStyle = 'rgba(31,26,16,0.5)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(p.facing.x * (p.radius + 8), p.facing.y * (p.radius + 8));
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawEnemy(ctx, e, time) {
-  const bob = Math.sin(time * 5 + e.id) * 1.5;
-  ctx.save();
-  ctx.translate(e.x, e.y + bob);
-  ctx.fillStyle = 'rgba(31,26,16,0.22)';
-  ctx.beginPath();
-  ctx.ellipse(0, e.radius * 0.9 - bob, e.radius * 0.95, e.radius * 0.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Tubuh lencana merah.
-  ctx.fillStyle = '#c0392b';
-  ctx.strokeStyle = '#1f1a10';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.moveTo(0, -e.radius);
-  ctx.lineTo(e.radius, 0);
-  ctx.lineTo(0, e.radius);
-  ctx.lineTo(-e.radius, 0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  // Mata visor.
-  ctx.fillStyle = '#f7f1e2';
-  ctx.fillRect(-6, -4, 12, 4);
-  ctx.restore();
-  // Bar HP musuh.
-  const w = 34;
-  const frac = Math.max(0, e.hp / e.maxHp);
-  ctx.fillStyle = 'rgba(31,26,16,0.35)';
-  ctx.fillRect(e.x - w / 2, e.y - e.radius - 12, w, 5);
-  ctx.fillStyle = '#c0392b';
-  ctx.fillRect(e.x - w / 2, e.y - e.radius - 12, w * frac, 5);
-}
-
-function drawEffects(ctx, state) {
-  for (const ef of state.effects) {
-    const t = 1 - ef.ttl / ef.maxTtl;
-    if (ef.type === 'ring') {
-      ctx.beginPath();
-      ctx.arc(ef.x, ef.y, ef.radius * (0.4 + 0.6 * t), 0, Math.PI * 2);
-      ctx.strokeStyle = ef.color ?? '#f2c230';
-      ctx.globalAlpha = 1 - t;
-      ctx.lineWidth = 4;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    } else if (ef.type === 'cone') {
-      const half = ef.angle / 2;
-      const base = Math.atan2(ef.dir.y, ef.dir.x);
-      ctx.beginPath();
-      ctx.moveTo(ef.x, ef.y);
-      ctx.arc(ef.x, ef.y, ef.radius, base - half, base + half);
-      ctx.closePath();
-      ctx.globalAlpha = 0.45 * (1 - t);
-      ctx.fillStyle = ef.color ?? '#e2703a';
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    } else if (ef.type === 'dash') {
-      ctx.beginPath();
-      ctx.moveTo(ef.x, ef.y);
-      ctx.lineTo(ef.x2, ef.y2);
-      ctx.strokeStyle = ef.color ?? '#3a7bd5';
-      ctx.globalAlpha = 1 - t;
-      ctx.lineWidth = 10;
-      ctx.lineCap = 'round';
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    } else if (ef.type === 'hit') {
-      ctx.beginPath();
-      ctx.arc(ef.x, ef.y, ef.radius * t + 6, 0, Math.PI * 2);
-      ctx.strokeStyle = '#1f1a10';
-      ctx.globalAlpha = 0.7 * (1 - t);
-      ctx.lineWidth = 3;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    } else if (ef.type === 'ko') {
-      ctx.beginPath();
-      ctx.arc(ef.x, ef.y, ef.radius * t + 8, 0, Math.PI * 2);
-      ctx.strokeStyle = '#c0392b';
-      ctx.globalAlpha = 1 - t;
-      ctx.lineWidth = 3;
-      ctx.setLineDash([4, 6]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-    } else if (ef.type === 'spawn') {
-      ctx.beginPath();
-      ctx.arc(ef.x, ef.y, ef.radius * (1 - t), 0, Math.PI * 2);
-      ctx.strokeStyle = '#c0392b';
-      ctx.globalAlpha = t < 1 ? ef.ttl / ef.maxTtl : 1;
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-  }
-}
-
-function drawProjectiles(ctx, state) {
-  for (const p of state.projectiles) {
-    const isPlayer = p.team === 'player';
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    // Jejak.
-    ctx.strokeStyle = isPlayer ? 'rgba(242,194,48,0.55)' : 'rgba(192,57,43,0.55)';
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(-p.vx * 0.04, -p.vy * 0.04);
-    ctx.stroke();
-    ctx.fillStyle = isPlayer ? '#f2c230' : '#c0392b';
-    ctx.strokeStyle = '#1f1a10';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
-function drawAimLine(ctx, state) {
-  const target = getAimTarget(state);
-  if (!target) return;
-  const p = state.player;
-  ctx.setLineDash([5, 7]);
-  ctx.strokeStyle = 'rgba(31,26,16,0.35)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(p.x, p.y);
-  ctx.lineTo(target.x, target.y);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.beginPath();
-  ctx.arc(target.x, target.y, target.radius + 6, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(192,57,43,0.65)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-}
-
-function drawSkillCooldown(ctx, state) {
-  const p = state.player;
-  const frac = p.skillCooldown > 0 ? p.skillCooldown / p.character.skill.cooldown : 0;
-  if (frac <= 0) return;
-  ctx.beginPath();
-  ctx.moveTo(p.x, p.y);
-  ctx.arc(p.x, p.y, p.radius + 9, -Math.PI / 2, -Math.PI / 2 + (1 - frac) * Math.PI * 2);
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(31,26,16,0.25)';
-  ctx.fill();
-}
-
-export function render(ctx, state, scenery, time) {
-  ctx.clearRect(0, 0, state.width, state.height);
-  drawTerrain(ctx, state, scenery, time);
-  drawZone(ctx, state, time);
-  drawAimLine(ctx, state);
-  for (const e of state.enemies) {
-    if (e.alive) drawEnemy(ctx, e, time);
-  }
-  drawPlayerSilhouette(ctx, state.player, time);
-  drawSkillCooldown(ctx, state);
-  drawProjectiles(ctx, state);
-  drawEffects(ctx, state);
-  if (state.status === 'paused') {
-    ctx.fillStyle = 'rgba(23,20,16,0.35)';
-    ctx.fillRect(0, 0, state.width, state.height);
-  }
+      const subtreeStats = (root) => {
+        let count = 0;
+        let verts = 0;
+        root?.traverse((n) => {
+          if (n.isMesh) {
+            count += 1;
+            verts += n.geometry?.attributes?.position?.count ?? 0;
+          }
+        });
+        return { meshCount: count, vertexCount: verts };
+      };
+      const obstacleIds = [];
+      levelGroup?.traverse((n) => {
+        if (n.userData?.obstacleId) obstacleIds.push(n.userData.obstacleId);
+      });
+      const enemyIds = [...enemyMeshes.values()].map((m) => m.userData.modelId);
+      const p = playerMesh?.position;
+      const playerStats = subtreeStats(playerMesh);
+      return {
+        type: 'WebGL2',
+        threeRevision: THREE.REVISION,
+        camera: camera.isPerspectiveCamera ? 'PerspectiveCamera' : 'other',
+        fov: camera.fov,
+        triangles: renderer.info.render.triangles,
+        drawCalls: renderer.info.render.calls,
+        meshes,
+        shadowCasters,
+        shadowsEnabled: renderer.shadowMap.enabled,
+        shadowMapType: 'PCFSoftShadowMap',
+        shadowMapSize: sun.shadow.mapSize.x,
+        shadowLights: scene.children.filter((l) => l.isLight && l.castShadow).length,
+        cameraPosition: camera.position.toArray().map((v) => +v.toFixed(2)),
+        cameraTarget: lookTarget.toArray().map((v) => +v.toFixed(2)),
+        cameraAspect: +camera.aspect.toFixed(3),
+        playerWorld: p ? [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)] : null,
+        levelId: LEVEL.id,
+        levelName: LEVEL.name,
+        solidObstacles: obstacleIds,
+        obstacleMeshes: obstacleIds.length,
+        models: {
+          player: playerMesh?.userData.modelId ?? null,
+          enemies: enemyIds,
+          projectiles: projMeshes.size,
+          effects: fxMeshes.size,
+        },
+        playerMeshCount: playerStats.meshCount,
+        playerVertexCount: playerStats.vertexCount,
+        geometries: renderer.info.memory.geometries,
+        textures: renderer.info.memory.textures,
+      };
+    },
+  };
 }
