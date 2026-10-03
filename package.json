@@ -10,8 +10,8 @@
     "test": "node --test",
     "build": "node scripts/build.mjs",
     "verify": "npm test && npm run build",
-    "deploy": "npm run build && wrangler deploy",
-    "deploy:check": "npm run build && wrangler deploy --dry-run"
+    "deploy": "wrangler deploy",
+    "deploy:check": "wrangler deploy --dry-run"
   },
   "engines": {
     "node": ">=22"

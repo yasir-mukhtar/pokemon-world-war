@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PUBLIC_FILES, MAX_ASSET_BYTES, buildStaticAssets } from '../scripts/build.mjs';
 
@@ -161,7 +162,58 @@ test('wrangler.jsonc + package.json: kontrak Static Assets & skrip deploy', () =
 
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.scripts.build, 'node scripts/build.mjs');
-  assert.ok(pkg.scripts.deploy.startsWith('npm run build &&'));
+  assert.equal(pkg.scripts.deploy, 'wrangler deploy');
+  assert.equal(pkg.scripts['deploy:check'], 'wrangler deploy --dry-run');
   assert.equal(pkg.devDependencies.wrangler, '4.127.1');
   assert.match(pkg.engines.node, />=\s*22/);
+  assert.equal(cfg.build.command, 'npm run build');
 });
+
+// ---------- Regresi CLI nyata: checkout segar tanpa dist ----------
+test(
+  'wrangler deploy --dry-run di checkout segar: build hook membuat dist/ sendiri',
+  { timeout: 150000 },
+  () => {
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'pww-fresh-'));
+    for (const rel of PUBLIC_FILES) {
+      const dst = path.join(fresh, rel);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, rel), dst);
+    }
+    for (const extra of ['package.json', 'wrangler.jsonc', 'scripts/build.mjs']) {
+      const dst = path.join(fresh, extra);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, extra), dst);
+    }
+    assert.equal(fs.existsSync(path.join(fresh, 'dist')), false, 'dist harus absen sebelum deploy');
+
+    const cli = path.join(ROOT, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+    const out = execFileSync(process.execPath, [cli, 'deploy', '--dry-run'], {
+      cwd: fresh,
+      env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
+      timeout: 120000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.match(out, /\[custom build\]/);
+    assert.match(out, /dry-run: exiting/);
+
+    assert.ok(fs.statSync(path.join(fresh, 'dist', 'index.html')).isFile());
+    const outFiles = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else outFiles.push(p);
+      }
+    };
+    walk(path.join(fresh, 'dist'));
+    const rels = outFiles.map((p) => path.relative(path.join(fresh, 'dist'), p)).sort();
+    assert.deepEqual(rels, [...PUBLIC_FILES].sort());
+    for (const p of outFiles) {
+      const st = fs.lstatSync(p);
+      assert.ok(st.isFile() && !st.isSymbolicLink(), p);
+      assert.ok(st.size <= MAX_ASSET_BYTES, p);
+    }
+  },
+);
