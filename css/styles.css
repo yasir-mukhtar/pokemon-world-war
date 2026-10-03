@@ -51,11 +51,11 @@ body {
 }
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand-mark {
-  width: 30px; height: 30px; border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 34%, #fff 0 34%, transparent 35%),
-    linear-gradient(var(--ink) 44%, transparent 44% 56%, var(--ink) 56%),
-    radial-gradient(circle, var(--red) 0 50%, #fff 50% 100%);
+  width: 40px; height: 40px;
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: 9px;
   border: 2px solid var(--ink);
 }
 .brand-name {
@@ -217,6 +217,19 @@ body {
 .char-meta b { color: var(--ink); }
 .char-skill { font-size: 0.76rem; line-height: 1.45; color: var(--ink-soft); margin: 0; }
 .char-skill b { color: var(--ink); }
+.asset-tag {
+  position: absolute;
+  top: 34px;
+  left: 8px;
+  background: rgba(22, 115, 107, 0.85);
+  color: #f7f1e2;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
 .fan-tag {
   display: inline-block;
   margin-top: 8px;
@@ -381,6 +394,20 @@ select:hover { border-color: var(--ink); }
 .cta:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
 .cta:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
 .fine-print { font-size: 0.68rem; color: var(--ink-soft); text-align: center; margin: 10px 0 0; }
+
+.gl-error {
+  margin-top: 12px;
+  border: 2px solid var(--red);
+  border-radius: 10px;
+  background: #fbe9e5;
+  color: var(--red);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+
+.gl-error-arena { margin: 6px auto 0; max-width: 560px; text-align: center; }
 
 /* ---------- Arena ---------- */
 .arena {

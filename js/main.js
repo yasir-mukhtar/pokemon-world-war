@@ -11,7 +11,8 @@ import {
   getPhase,
 } from './data.js';
 import { createGame, stepGame } from './game-engine.js';
-import { render, createScenery } from './render.js';
+import { LEVEL } from './level.js';
+import { createArenaRenderer } from './render.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -137,7 +138,8 @@ function buildCharacterGrid() {
       <div class="char-title">${c.title}</div>
       <p class="char-meta">${c.role} · <b>HP ${c.hp}</b></p>
       <p class="char-skill"><b>${c.skill.name}:</b> ${c.skill.desc}</p>
-      <span class="fan-tag">Fan-made</span>`;
+      <span class="fan-tag">Fan-made</span>
+      ${c.referenceSheet ? '<span class="asset-tag">Referensi pengguna</span>' : ''}`;
     btn.addEventListener('click', () => {
       selection.characterId = c.id;
       saveSelection();
@@ -442,6 +444,14 @@ const hud = {
 
 let match = null;
 let lastFocused = null;
+let arenaRenderer = null;
+let glLost = false;
+
+// Renderer WebGL dibuat malas saat peluncuran pertama; gagal -> error terlihat.
+function getArenaRenderer() {
+  if (!arenaRenderer) arenaRenderer = createArenaRenderer(canvas);
+  return arenaRenderer;
+}
 
 function isCoarse() {
   return window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 720;
@@ -474,7 +484,6 @@ function closeModal(modal) {
 
 function resizeCanvas() {
   if (!match) return;
-  const dpr = window.devicePixelRatio || 1;
   const s = match.state;
   const aspect = s.width / s.height;
   // Batasi lebar canvas agar HUD + strip kontrol + canvas muat di viewport.
@@ -489,8 +498,7 @@ function resizeCanvas() {
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
   canvasWrap.style.width = `${cssW}px`;
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+  if (arenaRenderer) arenaRenderer.resize(cssW, cssH);
 }
 
 function buildInput() {
@@ -535,7 +543,7 @@ function setHudContext() {
   const opposing = getCountry(s.config.opposingId);
   const phase = getPhase(s.config.phaseId);
   const role = ROLES.find((r) => r.id === s.config.role) ?? ROLES[0];
-  hud.context.textContent = `${country.name} · ${s.config.city} — ${role.opposingLabel} ${opposing.name} · ${phase.name}`;
+  hud.context.textContent = `${country.name} · ${s.config.city} — ${role.opposingLabel} ${opposing.name} · ${phase.name} · Arena 3D: ${LEVEL.name}`;
   hud.charName.textContent = s.player.character.name;
   hud.objLabel.textContent = s.config.role === 'menyerang' ? 'Rebut zona' : 'Pertahankan zona';
   updateControlsStrip();
@@ -588,7 +596,6 @@ function clearInputs() {
 function newMatch(config) {
   return {
     state: createGame(config),
-    scenery: createScenery(11),
     keys: new Set(),
     joy: { x: 0, y: 0 },
     pressSkill: false,
@@ -600,8 +607,31 @@ function newMatch(config) {
   };
 }
 
+function showGlError(msg) {
+  const el = $('#gl-error');
+  if (!el) return;
+  if (msg) el.textContent = msg;
+  el.hidden = false;
+}
+
 function startMatch() {
+  if (glLost) {
+    showGlError('Konteks grafis WebGL hilang — muat ulang halaman untuk memulihkan.');
+    return;
+  }
   stopMatch();
+  $('#gl-error').hidden = true;
+  let rend;
+  try {
+    rend = getArenaRenderer();
+  } catch (err) {
+    // WebGL2 tidak tersedia — tetap di briefing dengan pesan jelas.
+    setupShell.hidden = false;
+    arena.hidden = true;
+    showGlError('Kartu grafis/browser ini tidak mendukung WebGL2 — arena 3D tidak bisa dimuat. Coba browser modern dengan akselerasi perangkat keras aktif.');
+    $('#btn-start').focus();
+    return;
+  }
   match = newMatch(selection);
   setupShell.hidden = true;
   arena.hidden = false;
@@ -611,14 +641,16 @@ function startMatch() {
   showTouchControls();
   resizeCanvas();
   updateHUD();
+  rend.start(match.state);
   match.lastTime = performance.now();
   match.rafId = requestAnimationFrame(tick);
   $('#btn-pause').focus();
 }
 
 function restartMatch() {
-  if (!match) return;
+  if (!match || !arenaRenderer || glLost) return;
   const cfg = { ...match.state.config };
+  const rend = arenaRenderer;
   stopMatch();
   match = newMatch(cfg);
   pauseModal.hidden = true;
@@ -627,6 +659,7 @@ function restartMatch() {
   showTouchControls();
   resizeCanvas();
   updateHUD();
+  rend.start(match.state);
   match.lastTime = performance.now();
   match.rafId = requestAnimationFrame(tick);
   $('#btn-pause').focus();
@@ -648,11 +681,7 @@ function tick(now) {
   if (s.status === 'running') {
     stepGame(s, dt, buildInput());
   }
-  const ctx = canvas.getContext('2d');
-  const sx = canvas.width / s.width;
-  const sy = canvas.height / s.height;
-  ctx.setTransform(sx, 0, 0, sy, 0, 0);
-  render(ctx, s, match.scenery, now / 1000);
+  if (!glLost) arenaRenderer?.render(s, dt);
   updateHUD();
   if ((s.status === 'won' || s.status === 'lost') && !match.resultShown) {
     match.resultShown = true;
@@ -677,7 +706,7 @@ function pauseMatch() {
 }
 
 function resumeMatch() {
-  if (!match || match.state.status !== 'paused') return;
+  if (!match || match.state.status !== 'paused' || glLost) return;
   match.state.status = 'running';
   match.lastTime = performance.now();
   closeModal(pauseModal);
@@ -839,13 +868,36 @@ $('#btn-result-briefing').addEventListener('click', backToBriefing);
 
 window.addEventListener('resize', () => {
   if (!match) return;
+  showTouchControls(); // hint/HUD aktual harus terukur sebelum fit canvas
   resizeCanvas();
-  showTouchControls();
 });
 
 // Hook debug ringan untuk verifikasi otomatis (bukan bagian UI).
 Object.defineProperty(window, '__pww', {
   get: () => match?.state ?? null,
+});
+Object.defineProperty(window, '__pww3d', {
+  get: () => arenaRenderer?.getDebugInfo() ?? null,
+});
+
+// Konteks WebGL hilang -> jeda simulasi + banner terlihat di arena.
+// Tidak render ke konteks mati; resume/restart diblokir sampai pulih/muat ulang.
+canvas.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  glLost = true;
+  if (match && match.state.status === 'running') pauseMatch();
+  if (!arena.hidden) {
+    const el = $('#gl-error-arena');
+    el.hidden = false;
+    el.textContent = 'Konteks grafis WebGL hilang — permainan dijeda. Muat ulang halaman untuk memulihkan.';
+  }
+});
+
+canvas.addEventListener('webglcontextrestored', () => {
+  glLost = false;
+  const el = $('#gl-error-arena');
+  if (el) el.hidden = true;
+  // Match tetap dijeda — pemain bisa Lanjutkan dari keadaan beku.
 });
 
 // ---------- Init ----------

@@ -1,0 +1,32 @@
+{
+  "id": "./",
+  "name": "Pokemon World War",
+  "short_name": "Pokemon WW",
+  "description": "Game 3D solo melawan AI: pilih karakter dan pertahankan atau rebut kota.",
+  "lang": "id",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#f7f1e2",
+  "background_color": "#f7f1e2",
+  "icons": [
+    {
+      "src": "assets/icons/game-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/game-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/game-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
