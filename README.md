@@ -24,20 +24,31 @@ npm run verify     # uji lengkap + build dist/
 
 ```bash
 npm run build        # salin 24 file allowlist -> dist/ (guard 25 MiB per file)
-npm run deploy:check # build + wrangler deploy --dry-run (lokal, tanpa auth)
-npm run deploy       # build + wrangler deploy (butuh login Cloudflare manual)
+npm run deploy:check # wrangler deploy --dry-run: build hook lalu dry-run (tanpa auth)
+npm run deploy       # wrangler deploy: build hook lalu deploy (butuh login Cloudflare)
 ```
 
 Cloudflare Workers **Static Assets** menyajikan `dist/` apa adanya — tidak ada
 server Node/HTTP di produksi, tidak ada fungsi Worker khusus. Build allowlist
 (`scripts/build.mjs`) hanya menyalin file yang dibutuhkan game: JPG sumber referensi,
 screenshot `docs/`, `test/`, `server.mjs`, dan konfigurasi tidak ikut ter-upload.
-Batas 25 MiB per file dijaga di build. Untuk Workers Builds/CI: build command
-`npm run build`, deploy command `npx wrangler deploy`, root = repo (tanpa
-`npm run server`). `compatibility_date` di-pin ke `2026-09-04` agar kompatibel
-dengan toolchain Wrangler yang terpasang. Pratinjau runtime lokal:
-`npx wrangler dev --local`. Readiness sudah diverifikasi via `--dry-run`;
-perintah deploy produksi tidak dijalankan dalam verifikasi ini.
+Batas 25 MiB per file dijaga di build.
+
+`wrangler.jsonc` mendefinisikan **custom build hook** (`build.command` =
+`npm run build`): setiap `wrangler deploy`/`wrangler dev` menjalankan build
+allowlist dulu sehingga `dist/` selalu ada — termasuk di checkout segar yang
+belum punya `dist/`. Artinya di dashboard Workers Builds, **Build command boleh
+dikosongkan** dan Deploy command cukup `npx wrangler deploy` (atau isi eksplisit
+`npm run build` — opsional, hasilnya sama); upload selalu `dist/`, tidak pernah
+root repo. Root project = repo (tanpa `npm run server`). `compatibility_date`
+di-pin ke `2026-09-04` agar kompatibel dengan toolchain Wrangler yang terpasang.
+Pratinjau runtime lokal: `npx wrangler dev --local`. Readiness sudah diverifikasi
+via `--dry-run`; perintah deploy produksi tidak dijalankan dalam verifikasi ini.
+
+Troubleshooting: kegagalan pada fase *Initializing build environment* (build
+berakhir sebelum clone/perintah apa pun berjalan) adalah timeout infrastruktur
+platform, bukan masalah kode game — solusinya **Retry build** atau cek status
+Cloudflare; tidak ada perubahan kode yang bisa memperbaikinya.
 
 ## Arena 3D — Alun-alun
 
